@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Valura AI Microservice</title>
+  <style>
+    body { margin:0; min-height:100vh; display:grid; place-items:center; font-family:Arial,sans-serif; background:#f5f7fb; color:#111827; }
+    .wrap { width:min(760px,92vw); background:#fff; border:1px solid #dbe3ee; border-radius:14px; padding:20px; box-shadow:0 8px 24px rgba(0,0,0,.08); }
+    h1 { margin:0 0 8px; font-size:24px; }
+    p { margin:0 0 16px; color:#4b5563; }
+    .row { display:grid; grid-template-columns:1fr 130px; gap:10px; }
+    input, button, textarea { font:inherit; border-radius:10px; border:1px solid #cbd5e1; padding:12px 14px; }
+    button { background:#0f766e; color:#fff; border:none; cursor:pointer; }
+    button:disabled { opacity:.6; cursor:not-allowed; }
+    .meta, .err { margin-top:12px; font-size:14px; white-space:pre-wrap; }
+    .meta { color:#334155; }
+    .err { color:#b91c1c; }
+    textarea { width:100%; min-height:280px; margin-top:12px; resize:vertical; background:#f8fafc; }
+    .hint { margin-top:10px; font-size:13px; color:#64748b; }
+  </style>
+</head>
+<body>
+  <main class="wrap">
+    <h1>Valura AI Microservice</h1>
+    <p>Minimal frontend for streaming responses from <code>POST /query</code>.</p>
+    <div class="row">
+      <input id="query" placeholder="Ask something like: How is my portfolio doing?" />
+      <button id="send">Send</button>
+    </div>
+    <div id="meta" class="meta"></div>
+    <div id="err" class="err"></div>
+    <textarea id="output" readonly placeholder="Streaming response will appear here..."></textarea>
+    <div class="hint">Uses fetch + ReadableStream for streamed POST responses.</div>
+  </main>
+  <script>
+    const queryEl = document.getElementById('query');
+    const sendEl = document.getElementById('send');
+    const outEl = document.getElementById('output');
+    const metaEl = document.getElementById('meta');
+    const errEl = document.getElementById('err');
+
+    function resetUI() {
+      outEl.value = '';
+      metaEl.textContent = '';
+      errEl.textContent = '';
+    }
+
+    function append(text) {
+      outEl.value += text;
+      outEl.scrollTop = outEl.scrollHeight;
+    }
+
+    async function sendQuery() {
+      const query = queryEl.value.trim();
+      if (!query) return;
+      resetUI();
+      sendEl.disabled = true;
+
+      try {
+        const res = await fetch('/query', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Accept': 'text/event-stream'
+          },
+          body: JSON.stringify({
+            session_id: 'web-ui-session',
+            user_id: 'usr_004',
+            query
+          })
+        });
+
+        if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`);
+
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const parts = buffer.split('\n\n');
+          buffer = parts.pop() || '';
+
+          for (const raw of parts) {
+            const lines = raw.split('\n');
+            let event = '';
+            let data = '';
+            for (const line of lines) {
+              if (line.startsWith('event:')) event = line.slice(6).trim();
+              if (line.startsWith('data:')) data += line.slice(5).trim();
+            }
+            if (!data) continue;
+
+            let payload;
+            try { payload = JSON.parse(data); } catch { payload = { text: data }; }
+
+            if (event === 'meta') {
+              metaEl.textContent = `meta: ${JSON.stringify(payload, null, 2)}`;
+            } else if (event === 'chunk') {
+              append(payload.text || '');
+            } else if (event === 'result') {
+              append('\n\n' + JSON.stringify(payload, null, 2));
+            } else if (event === 'error') {
+              errEl.textContent = payload.message || 'Streaming error';
+            } else if (event === 'done') {
+              append('\n\n[done]');
+            }
+          }
+        }
+      } catch (err) {
+        errEl.textContent = err.message || 'Request failed';
+      } finally {
+        sendEl.disabled = false;
+      }
+    }
+
+    sendEl.addEventListener('click', sendQuery);
+    queryEl.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') sendQuery();
+    });
+  </script>
+</body>
+</html>
