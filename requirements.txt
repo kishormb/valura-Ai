@@ -31,3 +31,5 @@ pytest-mock>=3.14.0
 #   - tenacity              — if you implement retry policies
 #   - cachetools            — if you implement the optional dedupe cache
 # =============================================================================
+pydantic
+yfinance
